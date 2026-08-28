@@ -1,6 +1,6 @@
 #ifndef SPEED_MOTOR_H_
 #define SPEED_MOTOR_H_
-#hi
+
 #include "main.h"   // CubeMX-generated - pulls in the correct stm32xxxx_hal.h
 #include "PID.h"
 
