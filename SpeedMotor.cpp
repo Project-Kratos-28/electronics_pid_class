@@ -47,18 +47,34 @@ float SpeedMotor::getTargetSpeed() const {
 
 void SpeedMotor::driveOutput(float pidOutput) {
     // Direction
+    // if (pidOutput >= 0.0f) {
+    //     HAL_GPIO_WritePin(dirPort_, dirPin1_, GPIO_PIN_SET);
+    //     HAL_GPIO_WritePin(dirPort_, dirPin2_, GPIO_PIN_RESET);
+    // } else {
+    //     HAL_GPIO_WritePin(dirPort_, dirPin1_, GPIO_PIN_RESET);
+    //     HAL_GPIO_WritePin(dirPort_, dirPin2_, GPIO_PIN_SET);
+    // }
+
+    // // Magnitude -> duty cycle
+    // float duty = (pidOutput < 0.0f) ? -pidOutput : pidOutput; // 0..100
+    // if (duty > 100.0f) duty = 100.0f;
+
+    // uint32_t compareValue = static_cast<uint32_t>((duty / 100.0f) * static_cast<float>(pwmPeriod_));
+    // __HAL_TIM_SET_COMPARE(pwmTim_, pwmChannel_, compareValue);
+
+    
+    // 1. Single DIR Pin Logic (High = Forward, Low = Reverse)
     if (pidOutput >= 0.0f) {
         HAL_GPIO_WritePin(dirPort_, dirPin1_, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(dirPort_, dirPin2_, GPIO_PIN_RESET);
     } else {
         HAL_GPIO_WritePin(dirPort_, dirPin1_, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(dirPort_, dirPin2_, GPIO_PIN_SET);
     }
 
-    // Magnitude -> duty cycle
-    float duty = (pidOutput < 0.0f) ? -pidOutput : pidOutput; // 0..100
+    // 2. PWM Duty Cycle (0 to 100%)
+    float duty = (pidOutput < 0.0f) ? -pidOutput : pidOutput;
     if (duty > 100.0f) duty = 100.0f;
 
+    // Convert duty percentage to Timer Compare Register value (ARR)
     uint32_t compareValue = static_cast<uint32_t>((duty / 100.0f) * static_cast<float>(pwmPeriod_));
     __HAL_TIM_SET_COMPARE(pwmTim_, pwmChannel_, compareValue);
 }

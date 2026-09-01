@@ -22,7 +22,39 @@ void PositionMotor::setTargetPosition(float positionSetpoint) {
 }
 
 void PositionMotor::setGains(float kp, float ki, float kd) {
-    pid_.setGains(kp, ki, kd);
+    pid_.setGains(kp, ki, kd);                                                                                                                                                                                                                  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
 }
 
 void PositionMotor::update(float currentPosition, float dt) {
