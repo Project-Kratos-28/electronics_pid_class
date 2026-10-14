@@ -56,9 +56,13 @@
 /* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */
+<<<<<<< HEAD
 
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
                     /**
+=======
+/**
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
   * Initializes the Global MSP.
   */
 void HAL_MspInit(void)
@@ -78,6 +82,7 @@ void HAL_MspInit(void)
   /* USER CODE END MspInit 1 */
 }
 
+<<<<<<< HEAD
 /**
   * @brief TIM_Base MSP Initialization
   * This function configures the hardware resources used in this example
@@ -242,6 +247,8 @@ void HAL_TIM_Encoder_MspDeInit(TIM_HandleTypeDef* htim_encoder)
 
 }
 
+=======
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */

@@ -1,210 +1,201 @@
-import sys
-import serial
-import serial.tools.list_ports
-import pyqtgraph as pg
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QLabel, QDoubleSpinBox, QPushButton, QComboBox, QGroupBox, QGridLayout
-)
-from PyQt6.QtCore import QTimer, pyqtSignal, QThread, Qt
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import collections
+import struct
+import time
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-class SerialReaderThread(QThread):
-    """Background thread to handle non-blocking UART reads."""
-    data_received = pyqtSignal(float, float, float)
+from pyocd.core.helpers import ConnectHelper
+from pyocd.debug.elf.symbols import ELFSymbolProvider
 
-    def __init__(self, ser):
-        super().__init__()
-        self.ser = ser
-        self.running = True
+def float_to_u32(val):
+    return struct.unpack('<I', struct.pack('<f', float(val)))[0]
 
-    def run(self):
-        while self.running and self.ser and self.ser.is_open:
-            try:
-                line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-                if line.startswith("DATA"):
-                    parts = line.split()
-                    if len(parts) == 4:
-                        rpm = float(parts[1])
-                        setpoint = float(parts[2])
-                        duty = float(parts[3])
-                        self.data_received.emit(rpm, setpoint, duty)
-            except Exception:
-                pass
+def u32_to_float(val):
+    return struct.unpack('<f', struct.pack('<I', val))[0]
 
-    def stop(self):
-        self.running = False
-        self.wait()
+class SWDPIDTunerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("STM32 Live SWD PID Tuner (Nucleo-F410RB / pyocd)")
 
-class PIDTunerApp(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("STM32 SpeedMotor PID Tuner")
-        self.resize(1000, 700)
+        self.session = None
+        self.target = None
+        self.is_reading = False
+        self.elf_path = ""
+        self.swd_lock = threading.Lock()  # Thread lock to prevent SWD bus collisions
 
-        self.ser = None
-        self.reader_thread = None
+        # Symbol memory addresses
+        self.addrs = {}
 
-        # Data buffers for live plotting
-        self.max_samples = 300
-        self.time_data = list(range(self.max_samples))
-        self.actual_rpm_data = [0.0] * self.max_samples
-        self.target_rpm_data = [0.0] * self.max_samples
-        self.duty_data = [0.0] * self.max_samples
+        # Plot data
+        self.max_data_points = 100
+        self.rpm_data = collections.deque(maxlen=self.max_data_points)
+        self.target_data = collections.deque(maxlen=self.max_data_points)
 
-        self.init_ui()
+        self.setup_ui()
+        self.update_plot()
 
-    def init_ui(self):
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
+    def setup_ui(self):
+        # --- File Selection Frame ---
+        file_frame = ttk.LabelFrame(self.root, text="Project ELF File")
+        file_frame.pack(fill="x", padx=10, pady=5)
 
-        # Control Panel (Left Side)
-        control_panel = QVBoxLayout()
-        control_panel.addWidget(self.create_connection_box())
-        control_panel.addWidget(self.create_pid_box())
-        control_panel.addStretch()
+        self.file_label = ttk.Label(file_frame, text="No .elf file selected", width=50)
+        self.file_label.pack(side="left", padx=5, pady=5)
 
-        # Plot Area (Right Side)
-        plot_layout = QVBoxLayout()
-        
-        # RPM Plot
-        self.plot_rpm = pg.PlotWidget(title="Speed (RPM)")
-        self.plot_rpm.showGrid(x=True, y=True)
-        self.plot_rpm.addLegend()
-        self.curve_target = self.plot_rpm.plot(pen=pg.mkPen('r', width=2, style=Qt.PenStyle.DashLine), name="Target RPM")
-        self.curve_actual = self.plot_rpm.plot(pen=pg.mkPen('g', width=2), name="Actual RPM")
-        plot_layout.addWidget(self.plot_rpm)
+        ttk.Button(file_frame, text="Browse .elf", command=self.select_elf).pack(side="left", padx=5)
 
-        # Duty Cycle Plot
-        self.plot_duty = pg.PlotWidget(title="PID Output Duty Cycle (%)")
-        self.plot_duty.showGrid(x=True, y=True)
-        self.plot_duty.setYRange(-105, 105)
-        self.curve_duty = self.plot_duty.plot(pen=pg.mkPen('b', width=2), name="Output %")
-        plot_layout.addWidget(self.plot_duty)
+        # --- SWD Connection Frame ---
+        conn_frame = ttk.LabelFrame(self.root, text="ST-Link SWD Connection")
+        conn_frame.pack(fill="x", padx=10, pady=5)
 
-        main_layout.addLayout(control_panel, 1)
-        main_layout.addLayout(plot_layout, 3)
+        # Configured for Nucleo-F410RB
+        self.target_mcu = ttk.Combobox(
+            conn_frame, 
+            values=["stm32f410rb", "stm32f410rbtx", "stm32f411re", "stm32f411ceux", "stm32f446re", "cortex_m"]
+        )
+        self.target_mcu.set("stm32f410rb")
+        self.target_mcu.pack(side="left", padx=5, pady=5)
 
-    def create_connection_box(self):
-        box = QGroupBox("Serial Connection")
-        layout = QGridLayout()
+        self.connect_btn = ttk.Button(conn_frame, text="Connect SWD", command=self.toggle_connection)
+        self.connect_btn.pack(side="left", padx=5, pady=5)
 
-        self.port_combo = QComboBox()
-        self.refresh_ports()
+        # --- PID Tuning Controls ---
+        control_frame = ttk.LabelFrame(self.root, text="Tuning Controls")
+        control_frame.pack(fill="x", padx=10, pady=5)
 
-        self.baud_combo = QComboBox()
-        self.baud_combo.addItems(["9600", "57600", "115200", "230400", "921600"])
-        self.baud_combo.setCurrentText("115200")
+        # Default sliders to 0.0 for safe startup
+        self.kp_val = tk.DoubleVar(value=0.0)
+        self.ki_val = tk.DoubleVar(value=0.0)
+        self.kd_val = tk.DoubleVar(value=0.0)
+        self.target_val = tk.DoubleVar(value=0.0)
 
-        self.btn_connect = QPushButton("Connect")
-        self.btn_connect.clicked.connect(self.toggle_connection)
+        self.create_slider(control_frame, "Target RPM", self.target_val, 0, 300)
+        self.create_slider(control_frame, "Kp", self.kp_val, 0, 10)
+        self.create_slider(control_frame, "Ki", self.ki_val, 0, 10)
+        self.create_slider(control_frame, "Kd", self.kd_val, 0, 10)
 
-        layout.addWidget(QLabel("Port:"), 0, 0)
-        layout.addWidget(self.port_combo, 0, 1)
-        layout.addWidget(QLabel("Baud:"), 1, 0)
-        layout.addWidget(self.baud_combo, 1, 1)
-        layout.addWidget(self.btn_connect, 2, 0, 1, 2)
-        box.setLayout(layout)
-        return box
+        ttk.Button(control_frame, text="Send Parameters", command=self.send_params).pack(pady=10)
 
-    def create_pid_box(self):
-        box = QGroupBox("PID & Motor Control")
-        layout = QGridLayout()
+        # --- Plot Frame ---
+        graph_frame = ttk.Frame(self.root)
+        graph_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        self.spin_kp = self.create_spinbox(0.0, 500.0, 2.0, 0.1)
-        self.spin_ki = self.create_spinbox(0.0, 500.0, 1.0, 0.1)
-        self.spin_kd = self.create_spinbox(0.0, 100.0, 0.0, 0.01)
-        self.spin_target = self.create_spinbox(-5000.0, 5000.0, 40.0, 5.0)
+        self.fig, self.ax = plt.subplots(figsize=(6, 4))
+        self.ax.set_title("Live RPM vs Target RPM (via SWD)")
+        self.ax.set_xlabel("Ticks")
+        self.ax.set_ylabel("RPM")
+        self.line_rpm, = self.ax.plot([], [], label="Actual RPM", color="blue")
+        self.line_target, = self.ax.plot([], [], label="Target RPM", color="red", linestyle="--")
+        self.ax.legend()
 
-        self.btn_send = QPushButton("Update Parameters")
-        self.btn_send.clicked.connect(self.send_parameters)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=graph_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
-        self.btn_estop = QPushButton("EMERGENCY STOP")
-        self.btn_estop.setStyleSheet("background-color: red; color: white; font-weight: bold; font-size: 14px;")
-        self.btn_estop.clicked.connect(self.emergency_stop)
+    def create_slider(self, parent, label_text, variable, from_, to_):
+        frame = ttk.Frame(parent)
+        frame.pack(fill="x", pady=2)
+        ttk.Label(frame, text=label_text, width=10).pack(side="left")
+        scale = ttk.Scale(frame, from_=from_, to=to_, variable=variable)
+        scale.pack(side="left", fill="x", expand=True, padx=5)
+        scale.bind("<ButtonRelease-1>", lambda _: self.send_params())
+        ttk.Label(frame, textvariable=variable, width=5).pack(side="left")
 
-        layout.addWidget(QLabel("Kp:"), 0, 0)
-        layout.addWidget(self.spin_kp, 0, 1)
-        layout.addWidget(QLabel("Ki:"), 1, 0)
-        layout.addWidget(self.spin_ki, 1, 1)
-        layout.addWidget(QLabel("Kd:"), 2, 0)
-        layout.addWidget(self.spin_kd, 2, 1)
-        layout.addWidget(QLabel("Target RPM:"), 3, 0)
-        layout.addWidget(self.spin_target, 3, 1)
-        layout.addWidget(self.btn_send, 4, 0, 1, 2)
-        layout.addWidget(self.btn_estop, 5, 0, 1, 2)
-        box.setLayout(layout)
-        return box
-
-    def create_spinbox(self, min_v, max_v, default, step):
-        sb = QDoubleSpinBox()
-        sb.setRange(min_v, max_v)
-        sb.setValue(default)
-        sb.setSingleStep(step)
-        sb.setDecimals(3)
-        return sb
-
-    def refresh_ports(self):
-        self.port_combo.clear()
-        ports = [port.device for port in serial.tools.list_ports.comports()]
-        self.port_combo.addItems(ports)
+    def select_elf(self):
+        filename = filedialog.askopenfilename(filetypes=[("ELF files", "*.elf")])
+        if filename:
+            self.elf_path = filename
+            self.file_label.config(text=filename.split('/')[-1])
 
     def toggle_connection(self):
-        if self.ser is None or not self.ser.is_open:
-            port = self.port_combo.currentText()
-            baud = int(self.baud_combo.currentText())
-            if not port:
+        if self.session and self.session.is_open:
+            self.is_reading = False
+            self.session.close()
+            self.connect_btn.config(text="Connect SWD")
+        else:
+            if not self.elf_path:
+                messagebox.showerror("Error", "Please select your project .elf file first!")
                 return
             try:
-                self.ser = serial.Serial(port, baud, timeout=0.1)
-                self.reader_thread = SerialReaderThread(self.ser)
-                self.reader_thread.data_received.connect(self.update_plots)
-                self.reader_thread.start()
-                self.btn_connect.setText("Disconnect")
+                mcu = self.target_mcu.get()
+                
+                self.session = ConnectHelper.session_with_chosen_probe(
+                    target_override=mcu,
+                    options={"elf": self.elf_path}
+                )
+                self.session.open()
+                self.target = self.session.target
+
+                # Ensure target is running (un-halt if attached in halted state)
+                if self.target.is_halted():
+                    self.target.resume()
+
+                if hasattr(self.target, 'elf') and self.target.elf:
+                    provider = self.target.elf
+                else:
+                    self.target.elf = self.elf_path
+                    provider = ELFSymbolProvider(self.target.elf)
+
+                symbols = ["g_kp", "g_ki", "g_kd", "g_target_rpm", "g_current_rpm", "g_output_duty"]
+                for sym in symbols:
+                    addr = provider.get_symbol_value(sym)
+                    if addr is None:
+                        if sym in ["g_kp", "g_ki", "g_kd", "g_target_rpm", "g_current_rpm"]:
+                            raise ValueError(f"Symbol '{sym}' not found in ELF file. Ensure extern \"C\" is used.")
+                    else:
+                        self.addrs[sym] = addr
+
+                self.is_reading = True
+                self.connect_btn.config(text="Disconnect SWD")
+                threading.Thread(target=self.read_swd_loop, daemon=True).start()
             except Exception as e:
-                print(f"Connection failed: {e}")
-        else:
-            if self.reader_thread:
-                self.reader_thread.stop()
-            self.ser.close()
-            self.ser = None
-            self.btn_connect.setText("Connect")
+                messagebox.showerror("SWD Error", str(e))
 
-    def send_parameters(self):
-        if self.ser and self.ser.is_open:
-            kp = self.spin_kp.value()
-            ki = self.spin_ki.value()
-            kd = self.spin_kd.value()
-            target = self.spin_target.value()
-            cmd = f"SET {kp:.3f} {ki:.3f} {kd:.3f} {target:.2f}\n"
-            self.ser.write(cmd.encode('utf-8'))
+    def send_params(self):
+        if self.target and self.is_reading:
+            try:
+                with self.swd_lock:
+                    self.target.write32(self.addrs["g_kp"], float_to_u32(self.kp_val.get()))
+                    self.target.write32(self.addrs["g_ki"], float_to_u32(self.ki_val.get()))
+                    self.target.write32(self.addrs["g_kd"], float_to_u32(self.kd_val.get()))
+                    self.target.write32(self.addrs["g_target_rpm"], float_to_u32(self.target_val.get()))
+                print(f"[SWD Success] Set Target={self.target_val.get():.1f}, Kp={self.kp_val.get():.1f}, Ki={self.ki_val.get():.1f}, Kd={self.kd_val.get():.1f}")
+            except Exception as e:
+                messagebox.showerror("Write Error", f"SWD Write Failed: {e}")
 
-    def emergency_stop(self):
-        self.spin_target.setValue(0.0)
-        self.send_parameters()
+    def read_swd_loop(self):
+        while self.is_reading:
+            try:
+                with self.swd_lock:
+                    raw_rpm = self.target.read32(self.addrs["g_current_rpm"])
+                    raw_target = self.target.read32(self.addrs["g_target_rpm"])
 
-    def update_plots(self, actual_rpm, target_rpm, duty):
-        self.actual_rpm_data.pop(0)
-        self.target_rpm_data.pop(0)
-        self.duty_data.pop(0)
+                current_rpm = u32_to_float(raw_rpm)
+                target_rpm = u32_to_float(raw_target)
 
-        self.actual_rpm_data.append(actual_rpm)
-        self.target_rpm_data.append(target_rpm)
-        self.duty_data.append(duty)
+                self.rpm_data.append(current_rpm)
+                self.target_data.append(target_rpm)
+                time.sleep(0.05)
+            except Exception:
+                time.sleep(0.05)
 
-        self.curve_actual.setData(self.time_data, self.actual_rpm_data)
-        self.curve_target.setData(self.time_data, self.target_rpm_data)
-        self.curve_duty.setData(self.time_data, self.duty_data)
-
-    def closeEvent(self, event):
-        if self.reader_thread:
-            self.reader_thread.stop()
-        if self.ser and self.ser.is_open:
-            self.ser.close()
-        event.accept()
+    def update_plot(self):
+        if len(self.rpm_data) > 0:
+            x_data = range(len(self.rpm_data))
+            self.line_rpm.set_data(x_data, self.rpm_data)
+            self.line_target.set_data(x_data, self.target_data)
+            self.ax.set_xlim(0, self.max_data_points)
+            
+            min_y = min(0, min(self.rpm_data) - 10)
+            max_y = max(max(self.target_data), max(self.rpm_data)) + 20
+            self.ax.set_ylim(min_y, max_y)
+            self.canvas.draw()
+        self.root.after(100, self.update_plot)
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = PIDTunerApp()
-    window.show()
-    sys.exit(app.exec())
+    root = tk.Tk()
+    app = SWDPIDTunerApp(root)
+    root.mainloop()

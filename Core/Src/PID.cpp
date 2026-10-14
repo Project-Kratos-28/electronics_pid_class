@@ -1,5 +1,9 @@
 #include "PID.h"
+<<<<<<< HEAD
 
+=======
+float pTerm;
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 PID::PID(float kp, float ki, float kd, float outputMin, float outputMax)
     : kp_(kp), ki_(ki), kd_(kd),
       setpoint_(0.0f), integral_(0.0f), prevMeasurement_(0.0f),
@@ -64,7 +68,11 @@ float PID::compute(float measurement, float dt) {
     float error = computeError(measurement);
 
     // --- Proportional ---
+<<<<<<< HEAD
     float pTerm = kp_ * error;
+=======
+    pTerm = kp_ * error;
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 
     // --- Integral ---
     integral_ += error * dt;

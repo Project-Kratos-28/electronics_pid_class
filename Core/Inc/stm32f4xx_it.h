@@ -55,7 +55,11 @@ void SVC_Handler(void);
 void DebugMon_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
+<<<<<<< HEAD
 void TIM4_IRQHandler(void);
+=======
+void TIM6_DAC_IRQHandler(void);
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */

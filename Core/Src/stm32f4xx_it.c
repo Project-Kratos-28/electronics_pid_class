@@ -55,7 +55,11 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+<<<<<<< HEAD
 extern TIM_HandleTypeDef htim4;
+=======
+extern TIM_HandleTypeDef htim6;
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -199,6 +203,7 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
+<<<<<<< HEAD
   * @brief This function handles TIM4 global interrupt.
   */
 void TIM4_IRQHandler(void)
@@ -210,6 +215,19 @@ void TIM4_IRQHandler(void)
   /* USER CODE BEGIN TIM4_IRQn 1 */
 
   /* USER CODE END TIM4_IRQn 1 */
+=======
+  * @brief This function handles TIM6 global interrupt and DAC channel underrun error interrupt.
+  */
+void TIM6_DAC_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM6_DAC_IRQn 0 */
+
+  /* USER CODE END TIM6_DAC_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim6);
+  /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
+
+  /* USER CODE END TIM6_DAC_IRQn 1 */
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 }
 
 /* USER CODE BEGIN 1 */

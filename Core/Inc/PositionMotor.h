@@ -20,7 +20,11 @@ public:
     //                        (e.g. 360.0f for degrees, 4096.0f for a 12-bit encoder)
     // kp, ki, kd           : starting PID gains (tune on the bench first)
     PositionMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t pwmPeriod,
+<<<<<<< HEAD
                   GPIO_TypeDef* dirPort, uint16_t dirPin1, uint16_t dirPin2,
+=======
+                  GPIO_TypeDef* dirPort, uint16_t dirPin,
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
                   float positionRange,
                   float kp, float ki, float kd);
 
@@ -33,7 +37,12 @@ public:
     // dt: seconds since the previous call.
     void update(float currentPosition, float dt);
 
+<<<<<<< HEAD
     void stop();                               // zero PWM, release direction pins
+=======
+    void stop();
+    void disableWrap(); // New helper function for linear actuators
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
     float getOutput() const;                   // last PID output, -100..100 (%)
     float getTargetPosition() const;
 
@@ -43,8 +52,12 @@ private:
     uint32_t pwmPeriod_;
 
     GPIO_TypeDef* dirPort_;
+<<<<<<< HEAD
     uint16_t dirPin1_;
     uint16_t dirPin2_;
+=======
+    uint16_t dirPin_;
+>>>>>>> d4f14b2 (Updated project code for Nucleo-F410RB live PID tuner)
 
     PID pid_;
     float lastOutput_;
