@@ -39,7 +39,7 @@ private:
 
     float outMin_;
     float outMax_;
-
+    float filteredD_; // <--- ADD THIS LINE
     bool firstRun_;
     bool wrapEnabled_;
     float wrapRange_;

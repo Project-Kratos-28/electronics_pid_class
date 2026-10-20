@@ -3,6 +3,7 @@ float pTerm;
 PID::PID(float kp, float ki, float kd, float outputMin, float outputMax)
     : kp_(kp), ki_(ki), kd_(kd),
       setpoint_(0.0f), integral_(0.0f), prevMeasurement_(0.0f),
+      filteredD_(0.0f), // <--- INITIALIZE HERE
       outMin_(outputMin), outMax_(outputMax),
       firstRun_(true), wrapEnabled_(false), wrapRange_(0.0f)
 {
@@ -30,6 +31,7 @@ float PID::getSetpoint() const {
 void PID::reset() {
     integral_ = 0.0f;
     prevMeasurement_ = 0.0f;
+    filteredD_ = 0.0f; // <--- ADD THIS LINE
     firstRun_ = true;
 }
 
@@ -70,8 +72,8 @@ float PID::compute(float measurement, float dt) {
     integral_ += error * dt;
     float iTerm = ki_ * integral_;
 
-    // --- Derivative on measurement, not on error ---
-    // Avoids a derivative "kick" every time you change the setpoint.
+    // --- Derivative on measurement with Low-Pass Filter ---
+    // Avoids derivative "kick" on setpoint change and smooths encoder quantization noise.
     float dTerm = 0.0f;
     if (!firstRun_) {
         float dMeasurement = measurement - prevMeasurement_;
@@ -80,24 +82,13 @@ float PID::compute(float measurement, float dt) {
             while (dMeasurement > half)  dMeasurement -= wrapRange_;
             while (dMeasurement < -half) dMeasurement += wrapRange_;
         }
-        dTerm = -kd_ * (dMeasurement / dt);
+        
+        // Raw derivative calculation
+        float rawD = -(dMeasurement / dt);
+
+        // First-Order Low-Pass Filter (alpha = 0.15 filters out 10ms encoder tick noise)
+        float alpha = 0.15f;
+        filteredD_ = (alpha * rawD) + ((1.0f - alpha) * filteredD_);
+
+        dTerm = kd_ * filteredD_;
     }
-
-    float output = pTerm + iTerm + dTerm;
-
-    // --- Clamp + anti-windup ---
-    // If we saturate, undo the integral step we just took so it doesn't
-    // keep climbing while the motor is already maxed out.
-    if (output > outMax_) {
-        output = outMax_;
-        if (ki_ != 0.0f) integral_ -= error * dt;
-    } else if (output < outMin_) {
-        output = outMin_;
-        if (ki_ != 0.0f) integral_ -= error * dt;
-    }
-
-    prevMeasurement_ = measurement;
-    firstRun_ = false;
-
-    return output;
-}
