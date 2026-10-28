@@ -58,10 +58,14 @@ class Board:
         from pyocd.core.helpers import ConnectHelper
         from pyocd.debug.elf.symbols import ELFSymbolProvider
         self.session = ConnectHelper.session_with_chosen_probe(target_override=mcu, options={"elf": elf})
+        if self.session is None:
+            raise SystemExit("no debug probe found - plug in the Nucleo USB and close CubeIDE's debug session")
         self.session.open()
         self.t = self.session.target
         if self.t.is_halted():
             self.t.resume()
+        if not self.t.elf:
+            self.t.elf = elf  # same fallback as pid_tuner.py
         syms = ELFSymbolProvider(self.t.elf)
         self.a = {}
         for s in ("g_kp", "g_ki", "g_kd", "g_target_rpm", "g_current_rpm", "g_pid_reset"):
