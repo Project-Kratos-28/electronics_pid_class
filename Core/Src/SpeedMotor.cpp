@@ -13,6 +13,7 @@ SpeedMotor::SpeedMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t 
 
 void SpeedMotor::begin() {
     HAL_TIM_PWM_Start(pwmTim_, pwmChannel_);
+    __HAL_TIM_MOE_ENABLE(pwmTim_); // Enables TIM1 master PWM outputs
     stop();
 }
 

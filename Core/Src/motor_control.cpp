@@ -36,7 +36,7 @@ static SpeedMotor driveMotor(&htim1, TIM_CHANNEL_1, PWM_PERIOD,
                               2.0f, 1.0f, 0.0f);
 
 static PositionMotor elbowMotor(&htim1, TIM_CHANNEL_1, PWM_PERIOD,
-                                 GPIOB, GPIO_PIN_4,
+                                 GPIOB, GPIO_PIN_2,
                                  4095.0f,
                                  1.0f, 0.2f, 0.0f);
 
@@ -57,10 +57,16 @@ static float ReadElbowAbsolutePosition(void) {
 
 static float ReadDriveSpeedRPM(float dt_seconds) {
     static uint32_t prev_count = 0;
+    static bool first_run = true;
 
-    // Read raw 32-bit hardware timer count
-    uint32_t current_count = __HAL_TIM_GET_COUNTER(&htim5);
-    g_raw_ticks = current_count; // Store raw tick value for SWD inspection
+	uint32_t current_count = __HAL_TIM_GET_COUNTER(&htim5);
+	g_raw_ticks = current_count;
+
+	if (first_run) {
+		prev_count = current_count;
+		first_run = false;
+		return 0.0f;
+	}
 
     int32_t delta_ticks = (int32_t)(current_count - prev_count);
     prev_count = current_count;

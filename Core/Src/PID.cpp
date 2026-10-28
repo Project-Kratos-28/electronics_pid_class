@@ -1,5 +1,4 @@
 #include "PID.h"
-float pTerm;
 PID::PID(float kp, float ki, float kd, float outputMin, float outputMax)
     : kp_(kp), ki_(ki), kd_(kd),
       setpoint_(0.0f), integral_(0.0f), prevMeasurement_(0.0f),
@@ -64,7 +63,7 @@ float PID::compute(float measurement, float dt) {
 	    float error = computeError(measurement);
 
 	    // --- Proportional ---
-	    pTerm = kp_ * error;
+	    float pTerm = kp_ * error;
 
 	    // --- Integral ---
 	    integral_ += error * dt;
