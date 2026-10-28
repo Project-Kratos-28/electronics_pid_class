@@ -21,6 +21,7 @@ extern "C" {
     volatile float g_output_duty = 0.0f;
 
     volatile uint32_t g_raw_ticks = 0; // Exposed to pyOCD for live debugging
+    volatile uint32_t g_pid_reset = 0; // Host sets 1 -> PID state cleared next cycle (pid_bruteforce.py)
 }
 
 const float ELBOW_MIN_POS = 200.0f;
@@ -90,6 +91,10 @@ void MotorControl_SetParams(float kp, float ki, float kd, float targetRpm) {
 }
 
 void MotorControl_Update(float dt_seconds) {
+    if (g_pid_reset) {
+        driveMotor.resetPid();
+        g_pid_reset = 0;
+    }
     driveMotor.setGains(g_kp, g_ki, g_kd);
     driveMotor.setTargetSpeed(g_target_rpm);
 

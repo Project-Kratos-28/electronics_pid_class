@@ -31,6 +31,7 @@ public:
     void update(float currentSpeedRPM, float dt);
 
     void stop();
+    void resetPid();                           // clear integral/derivative state
     float getOutput() const;                   // last PID output, -100..100 (%)
     float getTargetSpeed() const;
 

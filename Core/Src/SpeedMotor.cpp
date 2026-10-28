@@ -30,6 +30,10 @@ void SpeedMotor::update(float currentSpeedRPM, float dt) {
     driveOutput(output);
 }
 
+void SpeedMotor::resetPid() {
+    pid_.reset();
+}
+
 void SpeedMotor::stop() {
     HAL_GPIO_WritePin(dirPort_, dirPin1_, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(dirPort_, dirPin2_, GPIO_PIN_RESET);
