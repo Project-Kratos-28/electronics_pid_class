@@ -161,11 +161,14 @@ def main():
     try:
         for i, (kp, ki, kd) in enumerate(grid, 1):
             s = board.trial(kp, ki, kd, a.target, a.duration, abort_rpm)
-            ts = settling_time(s, a.target, a.band) if s[-1][0] >= a.duration * 0.9 else None
+            aborted = s[-1][0] < a.duration * 0.9
+            ts = None if aborted else settling_time(s, a.target, a.band)
             os_ = overshoot_pct(s, a.target)
-            rows.append((kp, ki, kd, ts, os_))
+            peak, final = max(y for _, y in s), s[-1][1]
+            rows.append((kp, ki, kd, ts, os_, peak, final, int(aborted)))
             print(f"[{i}/{len(grid)}] Kp={kp:.3f} Ki={ki:.3f} Kd={kd:.3f} -> "
-                  f"settle={'--' if ts is None else f'{ts:.3f}s'} overshoot={os_:.1f}%")
+                  f"settle={'--' if ts is None else f'{ts:.3f}s'} overshoot={os_:.1f}% "
+                  f"peak={peak:.1f} final={final:.1f}{' ABORTED' if aborted else ''}")
             time.sleep(a.rest)
     except KeyboardInterrupt:
         print("\ninterrupted")
@@ -175,7 +178,7 @@ def main():
 
     with open(a.out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["kp", "ki", "kd", "settling_s", "overshoot_pct"])
+        w.writerow(["kp", "ki", "kd", "settling_s", "overshoot_pct", "peak_rpm", "final_rpm", "aborted"])
         w.writerows(rows)
 
     ok = sorted((r for r in rows if r[3] is not None), key=lambda r: (r[3], r[4]))
@@ -184,7 +187,7 @@ def main():
         print("no combination settled - widen the grid, lengthen --duration, or loosen --band")
         return
     print("best (settling, then overshoot):")
-    for kp, ki, kd, ts, os_ in ok[:5]:
+    for kp, ki, kd, ts, os_, *_ in ok[:5]:
         print(f"  Kp={kp:.3f} Ki={ki:.3f} Kd={kd:.3f}  settle={ts:.3f}s  overshoot={os_:.1f}%")
 
 
