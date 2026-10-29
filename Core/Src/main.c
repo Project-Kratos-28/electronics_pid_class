@@ -2,7 +2,17 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body (Nucleo-F410RB Cleaned)
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -17,7 +27,6 @@
 #include "motor_control.h"
 #include "gpio.h"
 #include "tim.h"
-#include "i2c.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -32,6 +41,7 @@
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
+
 /* USER CODE BEGIN PM */
 
 /* USER CODE END PM */
@@ -84,35 +94,37 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2C1_Init();
   MX_TIM1_Init();
   MX_TIM5_Init();
   MX_TIM6_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   // 1. Start PWM Output (PA8)
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
 
-  // 2. Start Quadrature Encoder (PA0/PA1)
-  HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
-
-  // 3. Start 10ms Control Loop Interrupt
+    // 3. Start 10ms Control Loop Interrupt
   HAL_TIM_Base_Start_IT(&htim6);
 
-  // 4. Initialize Motor Control Subsystems
+    // 4. Initialize Motor Control Subsystems
   MotorControl_Init();
   Elbow_Control_Init();
   /* USER CODE END 2 */
+
+  /* Initialize leds */
+  BSP_LED_Init(LED2);
+
+  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
+  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      HAL_Delay(50);
-  }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-
+  }
   /* USER CODE END 3 */
 }
 
@@ -139,11 +151,18 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 8;
-  RCC_OscInitStruct.PLL.PLLN = 90;
+  RCC_OscInitStruct.PLL.PLLN = 180;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
   RCC_OscInitStruct.PLL.PLLR = 2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Activate the Over-Drive mode
+  */
+  if (HAL_PWREx_EnableOverDrive() != HAL_OK)
   {
     Error_Handler();
   }
@@ -154,10 +173,10 @@ void SystemClock_Config(void)
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -166,9 +185,9 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM6) // 10ms Interrupt
+    if (htim->Instance == TIM6) // 100us Interrupt
     {
-        MotorControl_Update(0.0001f);
+        MotorControl_Update(0.001f);
 
         // Disabled: prevents elbowMotor from overwriting PA8 PWM and PB4 direction pin
         // float target_pos = 2000.0f;

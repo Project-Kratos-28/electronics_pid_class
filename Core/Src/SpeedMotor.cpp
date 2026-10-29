@@ -5,7 +5,7 @@ SpeedMotor::SpeedMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t 
                         float kp, float ki, float kd)
     : pwmTim_(pwmTim), pwmChannel_(pwmChannel), pwmPeriod_(pwmPeriod),
       dirPort_(dirPort), dirPin1_(dirPin1), dirPin2_(dirPin2),
-      pid_(kp, ki, kd, -100.0f, 100.0f),
+      pid_(kp, ki, kd, -150.0f, 150.0f),
       lastOutput_(0.0f)
 {
     // No wrap here - speed is not circular like an absolute position is.

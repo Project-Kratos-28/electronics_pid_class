@@ -1,9 +1,9 @@
-../Core/Src/motor_control.cpp:44:14:float ReadElbowAbsolutePosition()	2
-../Core/Src/motor_control.cpp:59:14:float ReadDriveSpeedRPM(float)	2
-../Core/Src/motor_control.cpp:104:6:void MotorControl_Init()	1
-../Core/Src/motor_control.cpp:109:6:void Elbow_Control_Init()	1
-../Core/Src/motor_control.cpp:114:6:void MotorControl_SetParams(float, float, float, float)	1
-../Core/Src/motor_control.cpp:119:6:void MotorControl_Update(float)	1
-../Core/Src/motor_control.cpp:129:6:void Elbow_Control_Update(float, float)	1
-../Core/Src/motor_control.cpp:137:1:void __static_initialization_and_destruction_0()	1
-../Core/Src/motor_control.cpp:137:1:cpp)	1
+../Core/Src/motor_control.cpp:45:14:float ReadElbowAbsolutePosition()	2
+../Core/Src/motor_control.cpp:60:14:float ReadDriveSpeedRPM(float)	2
+../Core/Src/motor_control.cpp:105:6:void MotorControl_Init()	1
+../Core/Src/motor_control.cpp:110:6:void Elbow_Control_Init()	1
+../Core/Src/motor_control.cpp:115:6:void MotorControl_SetParams(float, float, float, float)	1
+../Core/Src/motor_control.cpp:121:6:void MotorControl_Update(float)	1
+../Core/Src/motor_control.cpp:131:6:void Elbow_Control_Update(float, float)	1
+../Core/Src/motor_control.cpp:139:1:void __static_initialization_and_destruction_0()	1
+../Core/Src/motor_control.cpp:139:1:cpp)	1

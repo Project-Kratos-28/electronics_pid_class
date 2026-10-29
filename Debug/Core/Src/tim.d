@@ -4,7 +4,7 @@ Core/Src/tim.o: ../Core/Src/tim.c ../Core/Inc/tim.h ../Core/Inc/main.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_rcc.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_def.h \
  ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h \
- ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f410rx.h \
+ ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h \
  ../Drivers/CMSIS/Include/core_cm4.h \
  ../Drivers/CMSIS/Include/cmsis_version.h \
  ../Drivers/CMSIS/Include/cmsis_compiler.h \
@@ -27,7 +27,8 @@ Core/Src/tim.o: ../Core/Src/tim.c ../Core/Inc/tim.h ../Core/Inc/main.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr_ex.h \
  ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h \
- ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h
+ ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h \
+ ../Drivers/BSP/STM32F4xx-Nucleo/stm32f4xx_nucleo.h
 ../Core/Inc/tim.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h:
@@ -35,7 +36,7 @@ Core/Src/tim.o: ../Core/Src/tim.c ../Core/Inc/tim.h ../Core/Inc/main.h \
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_rcc.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_def.h:
 ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h:
-../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f410rx.h:
+../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h:
 ../Drivers/CMSIS/Include/core_cm4.h:
 ../Drivers/CMSIS/Include/cmsis_version.h:
 ../Drivers/CMSIS/Include/cmsis_compiler.h:
@@ -59,3 +60,4 @@ Core/Src/tim.o: ../Core/Src/tim.c ../Core/Inc/tim.h ../Core/Inc/main.h \
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_pwr_ex.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h:
 ../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h:
+../Drivers/BSP/STM32F4xx-Nucleo/stm32f4xx_nucleo.h:
