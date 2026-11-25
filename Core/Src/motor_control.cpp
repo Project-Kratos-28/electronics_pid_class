@@ -127,16 +127,29 @@ extern I2C_HandleTypeDef hi2c1; // I2C Handle
 
 // --- SWD Live Variables (Accessible via pyocd) ---
 extern "C" {
-// Steering motor (used by Python SWD Angle Tuner).
+// Steering motor (used by tools/steer_tuner.py).
 // Angles are in the Ackermann controller's frame: 0..180 deg, 90 = straight.
-// Gains are per DEGREE of error (old per-count gains x 11.38 = same behaviour).
+// Gains are per DEGREE of error.
     volatile float g_kp = 0.0f;
     volatile float g_ki = 0.0f;
     volatile float g_kd = 0.0f;
     volatile float g_target_angle = 90.0f;
     volatile float g_current_angle = 90.0f;
-    volatile float g_elbow_duty = 0.0f;
-    volatile uint32_t g_steer_raw = 0;   // raw AS5600 count - read this to calibrate STEER_HOME_RAW
+    volatile float g_steer_duty = 0.0f;
+    volatile uint32_t g_steer_raw = 0;      // raw count of the steering encoder - use to calibrate STEER_HOME_RAW
+    volatile uint32_t g_steer_fault = 0;    // 1 = steering encoder not responding, motor held off
+
+    // Open-loop polarity test: write duty (-100..100) first, then ms (> 0).
+    // The motor runs open-loop for that long, then the firmware clears ms and
+    // goes back to the PID - so a crashed tuner can't leave it driving.
+    volatile float g_steer_test_duty = 0.0f;
+    volatile uint32_t g_steer_test_ms = 0;
+
+    // All four AS5600 encoders behind the PCA9548A (read every control cycle)
+    volatile uint32_t g_enc_raw[NUM_ENCODERS] = {0};  // last good raw count, 0..4095
+    volatile uint32_t g_enc_err[NUM_ENCODERS] = {0};  // failed reads since boot
+    volatile uint32_t g_enc_ok = 0;                   // bit n = channel n read OK last cycle
+    volatile uint32_t g_control_dt_ms = 0;            // actual control period
 
     // Drive Speed Motor (independent SWD variables)
     volatile float g_drive_kp = 0.0f;
@@ -149,19 +162,28 @@ extern "C" {
     volatile uint32_t g_raw_ticks = 0; // Exposed to pyOCD for live debugging
 }
 
+// --- Encoders: 4x AS5600 (all at 0x36) behind a PCA9548A I2C multiplexer ---
+#define PCA9548A_I2C_ADDR       (0x70 << 1)
 #define AS5600_I2C_ADDR         (0x36 << 1)
 #define AS5600_RAW_ANGLE_REG    0x0C
+#define I2C_TIMEOUT_MS          5
+#define ENC_FAIL_LIMIT          10   // consecutive failed steering reads -> motor held off
 
-// --- Steering calibration (per wheel) ---
-// STEER_HOME_RAW: raw AS5600 count with the wheel pointing straight ahead.
-//   Point the wheel straight, read g_steer_raw over SWD, put the value here.
-// STEER_ENCODER_DIR: +1 if raw counts go UP as the steering angle goes up
-//   (towards 180), -1 otherwise. If the wheel runs away to a lock instead of
-//   settling, this (or the DIR pin wiring) is the wrong way round.
+// Control loop runs from the main loop every CONTROL_PERIOD_MS (no timer IRQ).
+// One sweep of all 4 encoders takes ~2.4 ms at 100 kHz I2C (~0.7 ms at 400 kHz).
+#define CONTROL_PERIOD_MS       5
+
+// --- Steering calibration ---
+// STEER_ENC_CH:      PCA9548A channel (0..3) the steering wheel's AS5600 is on.
+// STEER_HOME_RAW:    raw count with the wheel pointing straight ahead.
+//                    Point the wheel straight, read g_steer_raw over SWD, put it here.
+// STEER_ENCODER_DIR: +1 if raw counts go UP as the steering angle goes up (towards 180).
+// STEER_MOTOR_DIR:   +1 if DIR pin HIGH moves the steering angle UP, -1 if DIR LOW does.
+//                    Use the tuner's "dircheck" to find it.
+#define STEER_ENC_CH        0      // TODO: set to the steering encoder's mux channel
 #define STEER_HOME_RAW      2048   // TODO: calibrate
 #define STEER_ENCODER_DIR   (+1)   // TODO: verify
-
-static uint16_t last_valid_raw = STEER_HOME_RAW;
+#define STEER_MOTOR_DIR     (+1)   // TODO: verify with dircheck
 
 // --- Speed Motor (PA8 / TIM1_CH1 PWM, PB4 DIR) ---
 static SpeedMotor driveMotor(&htim5, TIM_CHANNEL_1, PWM_PERIOD,
@@ -171,24 +193,44 @@ static SpeedMotor driveMotor(&htim5, TIM_CHANNEL_1, PWM_PERIOD,
 // --- Steering Motor (TIM5_CH2 PWM, PB2 DIR) ---
 static SteerMotor steerMotor(&htim5, TIM_CHANNEL_2, PWM_PERIOD,
                              GPIOB, GPIO_PIN_2,
-                             STEER_HOME_RAW, STEER_ENCODER_DIR,
-                             11.4f, 2.3f, 0.0f);   // = old 1.0 / 0.2 per-count gains
+                             STEER_HOME_RAW, STEER_ENCODER_DIR, STEER_MOTOR_DIR,
+                             0.0f, 0.0f, 0.0f);   // real gains come from g_kp/g_ki/g_kd
 
-// Returns the raw 12-bit AS5600 count (0..4095); holds the last good value on I2C error.
-static uint16_t ReadSteerRawCounts(void) {
-    uint8_t buffer[2] = {0};
+static uint32_t lastControlTick = 0;
+static uint32_t steerFailCount = 0;
 
-    HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1,
-            AS5600_I2C_ADDR, AS5600_RAW_ANGLE_REG, I2C_MEMADD_SIZE_8BIT,
-            buffer, 2, 2);
+// Select one mux channel and read that AS5600's raw angle.
+// The PCA9548A switches on the STOP of the select write, so no delay is needed.
+static bool ReadEncoder(uint8_t ch, uint16_t* out) {
+    uint8_t sel = (uint8_t)(1u << ch);
+    if (HAL_I2C_Master_Transmit(&hi2c1, PCA9548A_I2C_ADDR, &sel, 1, I2C_TIMEOUT_MS) != HAL_OK)
+        return false;
 
-    if (status == HAL_OK) {
-        uint16_t raw_val = ((uint16_t)buffer[0] << 8) | buffer[1];
-        last_valid_raw = raw_val & 0x0FFF;
+    uint8_t buf[2];
+    if (HAL_I2C_Mem_Read(&hi2c1, AS5600_I2C_ADDR, AS5600_RAW_ANGLE_REG, I2C_MEMADD_SIZE_8BIT,
+                         buf, 2, I2C_TIMEOUT_MS) != HAL_OK)
+        return false;
+
+    *out = (((uint16_t)buf[0] << 8) | buf[1]) & 0x0FFF;
+    return true;
+}
+
+// Read all four encoders back to back. They share one bus and one address,
+// so this is a fast sweep, not a truly simultaneous read: worst-case skew
+// between channel 0 and 3 is one sweep (~2.4 ms at 100 kHz).
+// A failed channel keeps its last good value; see g_enc_ok / g_enc_err.
+void Encoders_ReadAll(void) {
+    uint32_t okMask = 0;
+    for (uint8_t ch = 0; ch < NUM_ENCODERS; ch++) {
+        uint16_t raw;
+        if (ReadEncoder(ch, &raw)) {
+            g_enc_raw[ch] = raw;
+            okMask |= (1u << ch);
+        } else {
+            g_enc_err[ch]++;
+        }
     }
-
-    g_steer_raw = last_valid_raw;
-    return last_valid_raw;
+    g_enc_ok = okMask;
 }
 
 static float ReadDriveSpeedRPM(float dt_seconds) {
@@ -241,13 +283,22 @@ void MotorControl_Init(void) {
     driveMotor.begin();
 }
 
-void Elbow_Control_Init(void) {
+void Steer_Control_Init(void) {
+    Encoders_ReadAll();
     steerMotor.begin();
 
-    // Sync initial target to the wheel's current angle so it holds still on boot
-    g_current_angle = steerMotor.rawToAngle(ReadSteerRawCounts());
-    steerMotor.setTargetAngle(g_current_angle);
-    g_target_angle = steerMotor.getTargetAngle();
+    // Hold the wheel where it is on boot (if the encoder answered).
+    g_steer_raw = g_enc_raw[STEER_ENC_CH];
+    if (g_enc_ok & (1u << STEER_ENC_CH)) {
+        g_current_angle = steerMotor.rawToAngle((uint16_t)g_steer_raw);
+        steerMotor.setTargetAngle(g_current_angle);
+        g_target_angle = steerMotor.getTargetAngle();
+    }
+    lastControlTick = HAL_GetTick();
+}
+
+void Steer_SetTargetAngle(float deg) {
+    g_target_angle = deg;   // picked up (and clamped to 0..180) on the next cycle
 }
 
 void MotorControl_SetParams(float kp, float ki, float kd, float targetRpm) {
@@ -265,15 +316,53 @@ void MotorControl_Update(float dt_seconds) {
     g_drive_duty = driveMotor.getOutput();
 }
 
-// target_deg: steering angle from the Ackermann controller, 0..180 deg (90 = straight).
-void Elbow_Control_Update(float target_deg, float dt_seconds) {
+// Call from the main loop as often as possible; runs one control cycle
+// every CONTROL_PERIOD_MS and returns immediately otherwise.
+void Steer_Control_Task(void) {
+    uint32_t now = HAL_GetTick();
+    uint32_t elapsed = now - lastControlTick;
+    if (elapsed < CONTROL_PERIOD_MS) return;
+    lastControlTick = now;
+    g_control_dt_ms = elapsed;
+    float dt = (float)elapsed * 0.001f;
+
+    Encoders_ReadAll();
+    g_steer_raw = g_enc_raw[STEER_ENC_CH];
+
+    // Encoder safety: don't steer blind on a stale reading.
+    if (g_enc_ok & (1u << STEER_ENC_CH)) {
+        steerFailCount = 0;
+    } else if (steerFailCount < ENC_FAIL_LIMIT) {
+        steerFailCount++;
+    }
+    if (steerFailCount >= ENC_FAIL_LIMIT) {
+        steerMotor.stop();
+        g_steer_fault = 1;
+        g_steer_test_ms = 0;
+        g_steer_duty = 0.0f;
+        return;
+    }
+    g_steer_fault = 0;
+
+    // Open-loop polarity test pulse (set by the tuner's dircheck).
+    uint32_t testLeft = g_steer_test_ms;
+    if (testLeft > 0) {
+        testLeft = (testLeft > elapsed) ? testLeft - elapsed : 0;
+        g_steer_test_ms = testLeft;
+        steerMotor.driveOpenLoop(testLeft ? g_steer_test_duty : 0.0f);
+        g_current_angle = steerMotor.rawToAngle((uint16_t)g_steer_raw);
+        g_steer_duty = steerMotor.getOutput();
+        return;
+    }
+
     steerMotor.setGains(g_kp, g_ki, g_kd);
 
-    steerMotor.setTargetAngle(target_deg);          // clamps to 0..180
-    g_target_angle = steerMotor.getTargetAngle();
+    float target = g_target_angle;
+    steerMotor.setTargetAngle(target);                 // clamps to 0..180
+    if (steerMotor.getTargetAngle() != target) g_target_angle = steerMotor.getTargetAngle();
 
-    steerMotor.update(ReadSteerRawCounts(), dt_seconds);
+    steerMotor.update((uint16_t)g_steer_raw, dt);
 
     g_current_angle = steerMotor.getAngle();
-    g_elbow_duty = steerMotor.getOutput();
+    g_steer_duty = steerMotor.getOutput();
 }

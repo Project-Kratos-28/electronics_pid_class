@@ -2,7 +2,7 @@
 
 SteerMotor::SteerMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t pwmPeriod,
                        GPIO_TypeDef* dirPort, uint16_t dirPin,
-                       uint16_t homeRaw, int encoderDir,
+                       uint16_t homeRaw, int encoderDir, int motorDir,
                        float kp, float ki, float kd)
     // PID works in degrees. Steering never crosses +/-180 deg from home, so
     // the PID's own wrap handling isn't needed - folding happens in rawToAngle().
@@ -13,6 +13,12 @@ SteerMotor::SteerMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t 
 {
     motor_.disableWrap();
     motor_.setDeadband(DEFAULT_DEADBAND);
+    motor_.setMotorDirection(motorDir);
+}
+
+void SteerMotor::driveOpenLoop(float duty) {
+    motor_.driveOpenLoop(duty);
+    rampInit_ = false;
 }
 
 void SteerMotor::begin() {

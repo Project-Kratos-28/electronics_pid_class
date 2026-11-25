@@ -8,7 +8,7 @@ PositionMotor::PositionMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uin
     : pwmTim_(pwmTim), pwmChannel_(pwmChannel), pwmPeriod_(pwmPeriod),
       dirPort_(dirPort), dirPin_(dirPin),
       pid_(kp, ki, kd, -100.0f, 100.0f),
-      lastOutput_(0.0f)
+      lastOutput_(0.0f), motorDir_(1)
 {
     pid_.enableWrap(positionRange); // Enabled by default for rotary motors
 
@@ -45,6 +45,16 @@ void PositionMotor::setGains(float kp, float ki, float kd) {
     pid_.setGains(kp, ki, kd);
 }
 
+void PositionMotor::setMotorDirection(int dir) {
+    motorDir_ = (dir >= 0) ? 1 : -1;
+}
+
+void PositionMotor::driveOpenLoop(float duty) {
+    pid_.reset();
+    lastOutput_ = duty;
+    driveOutput(duty);
+}
+
 void PositionMotor::update(float currentPosition, float dt) {
     float output = pid_.compute(currentPosition, dt);
     lastOutput_ = output;
@@ -68,12 +78,11 @@ float PositionMotor::getTargetPosition() const
 }
 
 void PositionMotor::driveOutput(float pidOutput) {
-    // 1. Direction logic
-    if (pidOutput >= 0.0f) {
-        HAL_GPIO_WritePin(dirPort_, dirPin_, GPIO_PIN_SET);
-    } else {
-        HAL_GPIO_WritePin(dirPort_, dirPin_, GPIO_PIN_RESET);
-    }
+    // 1. Direction logic. motorDir_ = -1 inverts the pin so a positive
+    //    output still means "move the position UP".
+    bool dirHigh = (pidOutput >= 0.0f);
+    if (motorDir_ < 0) dirHigh = !dirHigh;
+    HAL_GPIO_WritePin(dirPort_, dirPin_, dirHigh ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
     // 2. Magnitude & Stiction threshold
     float duty = std::abs(pidOutput);

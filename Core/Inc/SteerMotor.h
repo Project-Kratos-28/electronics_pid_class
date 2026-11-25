@@ -23,12 +23,15 @@
 class SteerMotor {
 public:
     // homeRaw     : raw encoder count when the wheel is pointing straight (90 deg)
-    // encoderDir  : +1 if raw counts increase as the steering angle increases,
-    //               -1 otherwise. Must agree with the motor's DIR pin polarity:
-    //               positive PID output must move the angle UP, or it runs away.
+    // encoderDir  : +1 if raw counts increase as the steering angle increases
+    //               (towards 180), -1 otherwise.
+    // motorDir    : +1 if driving with DIR pin HIGH moves the steering angle UP,
+    //               -1 if DIR LOW moves it up. Set encoderDir first, then fix
+    //               motorDir so a positive output raises the angle - otherwise
+    //               the loop has positive feedback and runs to the lock.
     SteerMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uint32_t pwmPeriod,
                GPIO_TypeDef* dirPort, uint16_t dirPin,
-               uint16_t homeRaw, int encoderDir,
+               uint16_t homeRaw, int encoderDir, int motorDir,
                float kp, float ki, float kd);
 
     void begin();
@@ -44,6 +47,10 @@ public:
     void setDeadband(float deg);                       // default 0.5 deg
     void setMaxRate(float degPerSec);                  // default 90 deg/s, 0 = no limit
     void setHomeRaw(uint16_t homeRaw);                 // re-calibrate at runtime
+
+    // Open-loop drive (-100..100 %) for the polarity check. Positive should
+    // raise the angle. Re-seeds the ramp so closed-loop resumes from here.
+    void driveOpenLoop(float duty);
 
     float rawToAngle(uint16_t rawCounts) const;        // raw counts -> 0..180 frame
 

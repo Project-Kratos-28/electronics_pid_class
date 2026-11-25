@@ -8,8 +8,12 @@ global variables in motor_control.cpp - no UART, no firmware rebuild per tweak.
     g_kp, g_ki, g_kd   (float, write)  PID gains, per DEGREE of error
     g_target_angle     (float, write)  steering target, 0..180 deg, 90 = straight
     g_current_angle    (float, read)   measured steering angle, deg
-    g_elbow_duty       (float, read)   PID output, -100..100 %
+    g_steer_duty       (float, read)   motor output, -100..100 %
     g_steer_raw        (uint32, read)  raw AS5600 count (for STEER_HOME_RAW calibration)
+    g_steer_fault      (uint32, read)  1 = steering encoder not answering, motor held off
+    g_steer_test_duty / g_steer_test_ms  (write)  open-loop pulse for the direction check
+    g_enc_raw[4], g_enc_err[4], g_enc_ok  (read)  all four AS5600s behind the PCA9548A
+    g_control_dt_ms    (uint32, read)  actual control period
 
 Symbol addresses are taken from the firmware ELF, so they stay correct after
 every rebuild. Point --elf at the .elf STM32CubeIDE built (usually
@@ -22,6 +26,11 @@ Usage:
     python tools/steer_tuner.py --elf Debug/motor_controlh753zi.elf          # live plot GUI
     python tools/steer_tuner.py --elf Debug/motor_controlh753zi.elf --cli    # text prompt
     python tools/steer_tuner.py --elf ... --log run1.csv                     # also log to CSV
+
+Direction check ("dircheck" in the CLI, "Dir check" button in the GUI):
+zeroes the gains, pulses the motor open-loop with +duty for a moment and
+reports whether the steering angle went UP. If it went down, flip
+STEER_MOTOR_DIR in motor_control.cpp. Do this before setting any gains.
 
 Safety: if the measured angle leaves [-15, 195] deg (wheel past its lock),
 the tuner zeroes all gains so the motor stops. That usually means
@@ -44,8 +53,11 @@ except ImportError as e:
 MIN_ANGLE, HOME_ANGLE, MAX_ANGLE = 0.0, 90.0, 180.0
 SAFE_LOW, SAFE_HIGH = -15.0, 195.0
 
-FLOAT_VARS = ["g_kp", "g_ki", "g_kd", "g_target_angle", "g_current_angle", "g_elbow_duty"]
-U32_VARS = ["g_steer_raw"]
+NUM_ENCODERS = 4
+FLOAT_VARS = ["g_kp", "g_ki", "g_kd", "g_target_angle", "g_current_angle", "g_steer_duty",
+              "g_steer_test_duty"]
+U32_VARS = ["g_steer_raw", "g_steer_fault", "g_steer_test_ms", "g_enc_raw", "g_enc_err",
+            "g_enc_ok", "g_control_dt_ms"]
 
 
 def load_symbols(elf_path):
@@ -79,8 +91,22 @@ class Board:
     def write_f(self, name, value):
         self.t.write32(self.sym[name], struct.unpack("<I", struct.pack("<f", float(value)))[0])
 
-    def read_u32(self, name):
-        return self.t.read32(self.sym[name])
+    def read_u32(self, name, index=0):
+        return self.t.read32(self.sym[name] + 4 * index)
+
+    def write_u32(self, name, value):
+        self.t.write32(self.sym[name], int(value) & 0xFFFFFFFF)
+
+    def encoders(self):
+        raws = [self.read_u32("g_enc_raw", i) for i in range(NUM_ENCODERS)]
+        errs = [self.read_u32("g_enc_err", i) for i in range(NUM_ENCODERS)]
+        ok = self.read_u32("g_enc_ok")
+        return raws, errs, ok
+
+    def pulse(self, duty, ms):
+        # duty first, then ms: the firmware starts the pulse when ms becomes > 0
+        self.write_f("g_steer_test_duty", duty)
+        self.write_u32("g_steer_test_ms", ms)
 
     def gains(self):
         return self.read_f("g_kp"), self.read_f("g_ki"), self.read_f("g_kd")
@@ -102,8 +128,9 @@ class Board:
         return {
             "target": self.read_f("g_target_angle"),
             "angle": self.read_f("g_current_angle"),
-            "duty": self.read_f("g_elbow_duty"),
+            "duty": self.read_f("g_steer_duty"),
             "raw": self.read_u32("g_steer_raw"),
+            "fault": self.read_u32("g_steer_fault"),
         }
 
 
@@ -134,6 +161,43 @@ def check_safety(board, s):
     return True
 
 
+def avg_angle(board, n=5, gap=0.01):
+    vals = []
+    for _ in range(n):
+        vals.append(board.read_f("g_current_angle"))
+        time.sleep(gap)
+    return sum(vals) / len(vals)
+
+
+def direction_check(board, duty=30.0, ms=250):
+    """Open-loop pulse, returns a human-readable verdict."""
+    if board.read_u32("g_steer_fault"):
+        return "Steering encoder is not answering (g_steer_fault = 1) - fix that first."
+    board.kill()                      # no PID fighting / running away afterwards
+    a0 = avg_angle(board)
+    r0 = board.read_u32("g_steer_raw")
+    board.pulse(abs(duty), ms)
+    time.sleep(ms / 1000.0 + 0.15)    # pulse + settle
+    a1 = avg_angle(board)
+    r1 = board.read_u32("g_steer_raw")
+    delta = a1 - a0
+    board.pulse(-abs(duty), ms)       # roughly undo the move
+    time.sleep(ms / 1000.0 + 0.15)
+
+    head = (f"+{abs(duty):.0f}% for {ms} ms: angle {a0:.1f} -> {a1:.1f} deg "
+            f"({delta:+.1f}), raw {r0} -> {r1}\n")
+    if abs(delta) < 1.0:
+        return head + ("Wheel barely moved. Raise duty/time (dircheck 40 400), check motor power, "
+                       "and that STEER_ENC_CH is the encoder on THIS wheel.")
+    if delta > 0:
+        return head + ("OK: positive output raises the angle - STEER_MOTOR_DIR is right.\n"
+                       "Also confirm by eye the wheel turned towards the side your Ackermann "
+                       "controller calls 180 deg; if not, flip STEER_ENCODER_DIR AND STEER_MOTOR_DIR.")
+    return head + ("WRONG WAY: positive output lowers the angle. Flip STEER_MOTOR_DIR "
+                   "(+1 <-> -1) in motor_control.cpp, rebuild, flash, re-run dircheck.\n"
+                   "Do NOT set gains until this passes - the loop would run to the lock.")
+
+
 # --------------------------------------------------------------------------- CLI
 
 CLI_HELP = """Commands:
@@ -144,6 +208,8 @@ CLI_HELP = """Commands:
   step <a> <b> [sec]           go to a, then b, recording for [sec] (default 2) and print stats
   watch [sec]                  print live readings for [sec] (default 3)
   s                            one-line status
+  enc                          all 4 encoders: raw count, read errors, OK flag
+  dircheck [duty] [ms]         motor polarity test (zeroes gains first; default 30 % / 250 ms)
   kill                         zero all gains (motor stops)
   q                            quit (gains are zeroed on exit)"""
 
@@ -242,8 +308,19 @@ def run_cli(board, logger, period):
             elif cmd == "s":
                 s = board.sample()
                 print(f"target {s['target']:.2f}  angle {s['angle']:.2f}  duty {s['duty']:.2f}%  "
-                      f"raw {s['raw']}  | kp={board.gains()[0]:.4f} ki={board.gains()[1]:.4f} "
+                      f"raw {s['raw']}{'  ENCODER FAULT' if s['fault'] else ''}  | kp={board.gains()[0]:.4f} ki={board.gains()[1]:.4f} "
                       f"kd={board.gains()[2]:.4f}")
+            elif cmd == "enc":
+                raws, errs, ok = board.encoders()
+                for ch in range(NUM_ENCODERS):
+                    flag = "OK " if ok & (1 << ch) else "ERR"
+                    print(f"  ch{ch}: raw {raws[ch]:4d} ({raws[ch] * 360 / 4096:6.1f} deg)  "
+                          f"{flag}  errors {errs[ch]}")
+                print(f"  control period {board.read_u32('g_control_dt_ms')} ms")
+            elif cmd == "dircheck":
+                duty = float(args[0]) if args else 30.0
+                ms = int(float(args[1])) if len(args) > 1 else 250
+                print(direction_check(board, duty, ms))
             elif cmd == "kill":
                 board.kill()
                 print("gains zeroed")
@@ -295,6 +372,7 @@ def run_gui(board, logger, period, window):
     tb_b = TextBox(fig.add_axes([0.25, 0.03, 0.07, 0.045]), "B ", initial="120")
     b_step = Button(fig.add_axes([0.35, 0.03, 0.14, 0.045]), "Step A <-> B")
     b_clear = Button(fig.add_axes([0.52, 0.03, 0.10, 0.045]), "Clear plot")
+    b_dir = Button(fig.add_axes([0.72, 0.03, 0.12, 0.045]), "Dir check")
 
     ts, tgts, angs, duties = [], [], [], []
     t_start = time.monotonic()
@@ -338,6 +416,15 @@ def run_gui(board, logger, period, window):
     b_step.on_clicked(do_step)
     b_clear.on_clicked(clear)
 
+    def dircheck(_):
+        msg = direction_check(board)
+        print(msg)
+        for tb in (tb_kp, tb_ki, tb_kd):
+            tb.set_val("0")           # direction_check zeroed the gains
+        status.set_text(msg.splitlines()[-1][:90])
+
+    b_dir.on_clicked(dircheck)
+
     def tick(_):
         try:
             s = board.sample()
@@ -364,9 +451,12 @@ def run_gui(board, logger, period, window):
         lo, hi = min(tgts + angs), max(tgts + angs)
         pad = max(2.0, 0.1 * (hi - lo))
         ax_ang.set_ylim(lo - pad, hi + pad)
+        raws, _, ok = board.encoders()
+        enc = "  ".join(f"{r:4d}" + ("" if ok & (1 << i) else "!") for i, r in enumerate(raws))
         status.set_text(f"angle {s['angle']:7.2f}  err {s['target'] - s['angle']:+7.2f}  "
-                        f"duty {s['duty']:+6.1f}%  raw {s['raw']:4d}\n"
-                        f"kp={g[0]:.4g}  ki={g[1]:.4g}  kd={g[2]:.4g}")
+                        f"duty {s['duty']:+6.1f}%  raw {s['raw']:4d}"
+                        f"{'  ENCODER FAULT' if s['fault'] else ''}\n"
+                        f"enc0-3 {enc}   kp={g[0]:.4g}  ki={g[1]:.4g}  kd={g[2]:.4g}")
         return l_tgt, l_ang, l_duty, status
 
     _anim = FuncAnimation(fig, tick, interval=int(period * 1000), cache_frame_data=False)

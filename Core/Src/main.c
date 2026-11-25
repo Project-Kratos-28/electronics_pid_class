@@ -38,9 +38,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define PCA9548A_ADDR       (0x70 << 1) // 8-bit shifted I2C address for Multiplexer
-#define AS5600_ADDR         (0x36 << 1) // 8-bit shifted I2C address for AS5600 Sensor
-#define NUM_SENSORS         4
+// Encoder mux (PCA9548A) and AS5600 reads now live in motor_control.cpp.
+#define ENC_DEBUG_PRINT     1     // 1 = print all 4 encoder raw values once a second
+#define ENC_PRINT_PERIOD_MS 1000
 
 /* USER CODE END PD */
 
@@ -59,14 +59,6 @@ volatile uint16_t encoder_raw_value = 0;
 volatile HAL_StatusTypeDef i2c_status = HAL_OK;
 volatile uint8_t magnet_status = 0;
 
-extern volatile float g_target_angle;
-volatile uint8_t elbow_loop_flag = 0;
-
-uint8_t current_channel = 0;
-uint16_t angle[NUM_SENSORS];
-uint16_t raw_val;
-float degrees;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -76,36 +68,10 @@ static void MPU_Config(void);
 
 /* USER CODE BEGIN PFP */
 
-HAL_StatusTypeDef PCA_SelectChannel(uint8_t channel);
-uint16_t AS5600_ReadAngle(void);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/* Switch active output channel on PCA9548A multiplexer (Blocking) */
-
-HAL_StatusTypeDef PCA_SelectChannel(uint8_t channel)
-
-{
-    if (channel >= NUM_SENSORS) return HAL_ERROR;
-    uint8_t pca_data = (1 << channel);
-    return HAL_I2C_Master_Transmit(&hi2c1, PCA9548A_ADDR, &pca_data, 1, 100);
-}
-
-/* Read 12-bit Raw Angle from selected AS5600 sensor (Blocking) */
-
-uint16_t AS5600_ReadAngle(void)
-{
-    uint8_t data[2];
-    if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDR, 0x0C, I2C_MEMADD_SIZE_8BIT, data, 2, 100) != HAL_OK)
-    {
-        return 0xFFFF; // Return Error Code
-    }
-    uint16_t angle_value = ((uint16_t)data[0] << 8) | data[1];
-    return angle_value & 0x0FFF; // Keep lower 12 bits (0-4095)
-}
 
 /* USER CODE END 0 */
 
@@ -163,10 +129,10 @@ int main(void)
   HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim15, TIM_CHANNEL_2);
 
-  HAL_TIM_Base_Start_IT(&htim7);
-
+  // No timer interrupt for control: Steer_Control_Task() runs from the main loop,
+  // so the encoder I2C reads never race each other.
   MotorControl_Init();
-  //Elbow_Control_Init();
+  Steer_Control_Init();
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -218,42 +184,20 @@ int main(void)
       /* ..... Perform your action ..... */
     }
 
-    // 1. Switch PCA9548A Multiplexer channel
-    	  if (PCA_SelectChannel(current_channel) == HAL_OK)
-    	  {
-    	      HAL_Delay(1); // Brief delay for multiplexer switching state
-    	      // 2. Read raw angle from AS5600 on current channel
-    	      raw_val = AS5600_ReadAngle();
+    // Reads all 4 encoders and runs the steering PID every 5 ms (non-blocking).
+    Steer_Control_Task();
 
-    	      // 3. Process & Display Angle
-    	      if (raw_val != 0xFFFF)
-    	      {
-    	          angle[current_channel] = raw_val;
-    	          degrees = (raw_val * 360.0f) / 4096.0f; // Convert 12-bit raw value to 0.0 - 360.0 degrees
-    	          uint16_t deg_int = (uint16_t)degrees;
-    	          uint16_t deg_dec = (uint16_t)((degrees - deg_int) * 100);
-    	          printf("Channel %d | Raw: %4u | Angle: %u.%02u deg\r\n",
-    	                 current_channel, raw_val, deg_int, deg_dec);
-    	      }
-    	      else
-    	      {
-    	          printf("Channel %d | SENSOR ERROR (AS5600 Not Responding)\r\n", current_channel);
-    	      }
-    	  }
-    	  else
-    	  {
-    	      printf("Channel %d | MULTIPLEXER ERROR (PCA9548A Not Responding)\r\n", current_channel);
-    	  }
-
-    	  // 4. Advance to next sensor
-    	  current_channel++;
-    	  if (current_channel >= NUM_SENSORS)
-    	  {
-    	      current_channel = 0;
-    	      printf("----------------------------------------\r\n");
-    	  }
-
-    	  HAL_Delay(1000); // Sampling interval delayS
+#if ENC_DEBUG_PRINT
+    // ~45 chars at 115200 baud blocks ~4 ms once a second; the PID uses the
+    // measured dt, so a late cycle is handled. Set ENC_DEBUG_PRINT 0 to drop it.
+    static uint32_t lastPrint = 0;
+    if (HAL_GetTick() - lastPrint >= ENC_PRINT_PERIOD_MS)
+    {
+      lastPrint = HAL_GetTick();
+      printf("Enc raw: %4lu %4lu %4lu %4lu | ok 0x%lX\r\n",
+             g_enc_raw[0], g_enc_raw[1], g_enc_raw[2], g_enc_raw[3], g_enc_ok);
+    }
+#endif
 
     /* USER CODE END WHILE */
 
@@ -315,14 +259,7 @@ void SystemClock_Config(void)
 
 
 /* USER CODE BEGIN 4 */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM7) // 100us Interrupt
-    {
-//        MotorControl_Update(0.001f);
-        Elbow_Control_Update(g_target_angle, 0.001f); // TIM7 = 1 kHz; target set over SWD by tools/steer_tuner.py
-    }
-}
+
 /* USER CODE END 4 */
 
  /* MPU Configuration */

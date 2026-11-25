@@ -42,7 +42,16 @@ public:
 
     // Low-pass time constant (seconds) on the D term. Default 0.02 s. 0 = off.
     void setDerivativeFilter(float tau);
-    float getOutput() const;                   // last PID output, -100..100 (%)
+    // Which DIR pin level means "positive output". +1: positive output -> DIR high.
+    // -1: positive output -> DIR low. Flip this instead of re-wiring the motor
+    // when a positive output moves the joint the wrong way.
+    void setMotorDirection(int dir);
+
+    // Bypass the PID and drive a fixed duty (-100..100 %), e.g. for a polarity
+    // check. Resets the PID so switching back to update() doesn't jump.
+    void driveOpenLoop(float duty);
+
+    float getOutput() const;                   // last output, -100..100 (%)
     float getTargetPosition() const;
 
 private:
@@ -58,6 +67,7 @@ private:
 
     PID pid_;
     float lastOutput_;
+    int motorDir_;
 
     void driveOutput(float pidOutput); // -100..100 -> direction pins + PWM duty
 };
