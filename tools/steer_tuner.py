@@ -46,6 +46,7 @@ try:
     from elftools.elf.elffile import ELFFile
     from elftools.elf.sections import SymbolTableSection
     from pyocd.core.helpers import ConnectHelper
+    from pyocd.core.target import Target
 except ImportError as e:
     sys.exit(f"Missing dependency ({e.name}). Run: pip install -r tools/requirements.txt")
 
@@ -464,6 +465,39 @@ def run_gui(board, logger, period, window):
 
 # --------------------------------------------------------------------------- main
 
+def connect(target_type, probe_id):
+    """Attach to the running board, same way as the old dev2 pid_tuner_position.py:
+    options dict + return_first, explicit open(), and fall back to the generic
+    'cortex_m' target if pyOCD doesn't accept the requested one."""
+    tried = []
+    for tt in dict.fromkeys([target_type, "cortex_m"]):   # de-duplicated, ordered
+        session = None
+        try:
+            session = ConnectHelper.session_with_chosen_probe(
+                return_first=True, unique_id=probe_id, auto_open=False,
+                options={"target_override": tt, "connect_mode": "attach",
+                         "frequency": 4000000})
+            if session is None:
+                sys.exit("No debug probe found. Is the board plugged in, and is "
+                         "STM32CubeIDE's debug session closed?")
+            session.open()
+            target = session.target
+            # attach shouldn't halt the core, but if it is halted, let it run
+            if target.get_state() == Target.State.HALTED:
+                target.resume()
+            return session, tt
+        except SystemExit:
+            raise
+        except Exception as e:
+            tried.append(f"  {tt}: {e}")
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+    sys.exit("Could not connect over SWD:\n" + "\n".join(tried))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Steering PID tuner over SWD (pyOCD)")
     ap.add_argument("--elf", required=True, help="firmware ELF (e.g. Debug/motor_controlh753zi.elf)")
@@ -485,23 +519,16 @@ def main():
     period = 1.0 / max(args.rate, 1.0)
 
     # attach: don't halt or reset the running firmware
-    try:
-        session = ConnectHelper.session_with_chosen_probe(
-            unique_id=args.probe, target_override=args.target,
-            connect_mode="attach", options={"frequency": 4000000})
-    except Exception as e:
-        if "not recognized" in str(e).lower() or "target type" in str(e).lower():
-            sys.exit(f"pyOCD doesn't know target '{args.target}': {e}\n"
-                     "Use a built-in one: --target stm32h723xx or --target stm32h743xx")
-        raise
-    if session is None:
-        sys.exit("No debug probe found.")
+    session, used_target = connect(args.target, args.probe)
+    if used_target != args.target:
+        print(f"Target '{args.target}' didn't work - connected with generic '{used_target}' instead "
+              "(fine for reading/writing variables).")
 
     logger = Logger(args.log)
-    with session:
+    try:
         board = Board(session.target, symbols)
         s = board.sample()
-        print(f"Connected. angle {s['angle']:.2f} deg, target {s['target']:.2f} deg, raw {s['raw']}")
+        print(f"Connected ({used_target}). angle {s['angle']:.2f} deg, target {s['target']:.2f} deg, raw {s['raw']}")
         print("kp=%.4f ki=%.4f kd=%.4f (per degree)" % board.gains())
         try:
             if args.cli:
@@ -512,7 +539,9 @@ def main():
             if not args.keep_gains:
                 board.kill()
                 print("Gains zeroed on exit.")
-            logger.close()
+    finally:
+        logger.close()
+        session.close()
 
 
 if __name__ == "__main__":
