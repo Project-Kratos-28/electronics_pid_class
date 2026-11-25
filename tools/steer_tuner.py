@@ -20,8 +20,7 @@ every rebuild. Point --elf at the .elf STM32CubeIDE built (usually
 Debug/motor_controlh753zi.elf).
 
 Usage:
-    pip install -r tools/requirements.txt
-    pyocd pack install stm32h753zitx            # once
+    pip install -r tools/requirements.txt       # no pyOCD pack download needed
 
     python tools/steer_tuner.py --elf Debug/motor_controlh753zi.elf          # live plot GUI
     python tools/steer_tuner.py --elf Debug/motor_controlh753zi.elf --cli    # text prompt
@@ -468,7 +467,11 @@ def run_gui(board, logger, period, window):
 def main():
     ap = argparse.ArgumentParser(description="Steering PID tuner over SWD (pyOCD)")
     ap.add_argument("--elf", required=True, help="firmware ELF (e.g. Debug/motor_controlh753zi.elf)")
-    ap.add_argument("--target", default="stm32h753zitx", help="pyOCD target type")
+    # pyOCD has no built-in H753 target. stm32h723xx is built in and worked with
+    # the previous tuner; stm32h743xx (same silicon as the H753) also works.
+    # Only memory reads/writes are used, so the exact part doesn't matter.
+    ap.add_argument("--target", default="stm32h723xx",
+                    help="pyOCD target type (default stm32h723xx; stm32h743xx also works)")
     ap.add_argument("--probe", default=None, help="probe unique ID (if several are connected)")
     ap.add_argument("--cli", action="store_true", help="text prompt instead of the plot GUI")
     ap.add_argument("--rate", type=float, default=50.0, help="sample rate in Hz (default 50)")
@@ -482,9 +485,15 @@ def main():
     period = 1.0 / max(args.rate, 1.0)
 
     # attach: don't halt or reset the running firmware
-    session = ConnectHelper.session_with_chosen_probe(
-        unique_id=args.probe, target_override=args.target,
-        connect_mode="attach", options={"frequency": 4000000})
+    try:
+        session = ConnectHelper.session_with_chosen_probe(
+            unique_id=args.probe, target_override=args.target,
+            connect_mode="attach", options={"frequency": 4000000})
+    except Exception as e:
+        if "not recognized" in str(e).lower() or "target type" in str(e).lower():
+            sys.exit(f"pyOCD doesn't know target '{args.target}': {e}\n"
+                     "Use a built-in one: --target stm32h723xx or --target stm32h743xx")
+        raise
     if session is None:
         sys.exit("No debug probe found.")
 
