@@ -112,7 +112,7 @@ void MotorControl_Update(float dt_seconds) {
 */
 
 #include "motor_control.h"
-#include "PositionMotor.h"
+#include "SteerMotor.h"
 #include "SpeedMotor.h"
 #include "main.h"
 #include <cstdio>
@@ -127,13 +127,16 @@ extern I2C_HandleTypeDef hi2c1; // I2C Handle
 
 // --- SWD Live Variables (Accessible via pyocd) ---
 extern "C" {
-// Elbow Position Motor (used by Python SWD Angle Tuner)
+// Steering motor (used by Python SWD Angle Tuner).
+// Angles are in the Ackermann controller's frame: 0..180 deg, 90 = straight.
+// Gains are per DEGREE of error (old per-count gains x 11.38 = same behaviour).
     volatile float g_kp = 0.0f;
     volatile float g_ki = 0.0f;
     volatile float g_kd = 0.0f;
-    volatile float g_target_angle = 2048.0f;
-    volatile float g_current_angle = 0.0f;
+    volatile float g_target_angle = 90.0f;
+    volatile float g_current_angle = 90.0f;
     volatile float g_elbow_duty = 0.0f;
+    volatile uint32_t g_steer_raw = 0;   // raw AS5600 count - read this to calibrate STEER_HOME_RAW
 
     // Drive Speed Motor (independent SWD variables)
     volatile float g_drive_kp = 0.0f;
@@ -146,25 +149,33 @@ extern "C" {
     volatile uint32_t g_raw_ticks = 0; // Exposed to pyOCD for live debugging
 }
 
-const float ELBOW_MIN_POS = 200.0f;
-const float ELBOW_MAX_POS = 3800.0f;
 #define AS5600_I2C_ADDR         (0x36 << 1)
 #define AS5600_RAW_ANGLE_REG    0x0C
 
-static float last_valid_position = 2048.0f;
+// --- Steering calibration (per wheel) ---
+// STEER_HOME_RAW: raw AS5600 count with the wheel pointing straight ahead.
+//   Point the wheel straight, read g_steer_raw over SWD, put the value here.
+// STEER_ENCODER_DIR: +1 if raw counts go UP as the steering angle goes up
+//   (towards 180), -1 otherwise. If the wheel runs away to a lock instead of
+//   settling, this (or the DIR pin wiring) is the wrong way round.
+#define STEER_HOME_RAW      2048   // TODO: calibrate
+#define STEER_ENCODER_DIR   (+1)   // TODO: verify
+
+static uint16_t last_valid_raw = STEER_HOME_RAW;
 
 // --- Speed Motor (PA8 / TIM1_CH1 PWM, PB4 DIR) ---
 static SpeedMotor driveMotor(&htim5, TIM_CHANNEL_1, PWM_PERIOD,
                               GPIOG, GPIO_PIN_9, 0,
                               2.0f, 1.0f, 0.0f);
 
-// --- Position Motor (PA9 / TIM1_CH2 PWM, PB2 DIR) ---
-static PositionMotor elbowMotor(&htim5, TIM_CHANNEL_2, PWM_PERIOD,
-                                 GPIOB, GPIO_PIN_2,
-                                 4095.0f,
-                                 1.0f, 0.2f, 0.0f);
+// --- Steering Motor (TIM5_CH2 PWM, PB2 DIR) ---
+static SteerMotor steerMotor(&htim5, TIM_CHANNEL_2, PWM_PERIOD,
+                             GPIOB, GPIO_PIN_2,
+                             STEER_HOME_RAW, STEER_ENCODER_DIR,
+                             11.4f, 2.3f, 0.0f);   // = old 1.0 / 0.2 per-count gains
 
-static float ReadElbowAbsolutePosition(void) {
+// Returns the raw 12-bit AS5600 count (0..4095); holds the last good value on I2C error.
+static uint16_t ReadSteerRawCounts(void) {
     uint8_t buffer[2] = {0};
 
     HAL_StatusTypeDef status = HAL_I2C_Mem_Read(&hi2c1,
@@ -173,10 +184,11 @@ static float ReadElbowAbsolutePosition(void) {
 
     if (status == HAL_OK) {
         uint16_t raw_val = ((uint16_t)buffer[0] << 8) | buffer[1];
-        last_valid_position = (float)(raw_val & 0x0FFF);
+        last_valid_raw = raw_val & 0x0FFF;
     }
 
-    return last_valid_position;
+    g_steer_raw = last_valid_raw;
+    return last_valid_raw;
 }
 
 static float ReadDriveSpeedRPM(float dt_seconds) {
@@ -230,12 +242,12 @@ void MotorControl_Init(void) {
 }
 
 void Elbow_Control_Init(void) {
-    elbowMotor.disableWrap();
-    elbowMotor.begin();
+    steerMotor.begin();
 
-    // Sync initial target to current AS5600 reading so the arm holds still on boot
-    g_current_angle = ReadElbowAbsolutePosition();
-    g_target_angle = g_current_angle;
+    // Sync initial target to the wheel's current angle so it holds still on boot
+    g_current_angle = steerMotor.rawToAngle(ReadSteerRawCounts());
+    steerMotor.setTargetAngle(g_current_angle);
+    g_target_angle = steerMotor.getTargetAngle();
 }
 
 void MotorControl_SetParams(float kp, float ki, float kd, float targetRpm) {
@@ -253,16 +265,15 @@ void MotorControl_Update(float dt_seconds) {
     g_drive_duty = driveMotor.getOutput();
 }
 
-void Elbow_Control_Update(float target_position, float dt_seconds) {
-    elbowMotor.setGains(g_kp, g_ki, g_kd);
+// target_deg: steering angle from the Ackermann controller, 0..180 deg (90 = straight).
+void Elbow_Control_Update(float target_deg, float dt_seconds) {
+    steerMotor.setGains(g_kp, g_ki, g_kd);
 
-    if (target_position > ELBOW_MAX_POS) target_position = ELBOW_MAX_POS;
-    if (target_position < ELBOW_MIN_POS) target_position = ELBOW_MIN_POS;
-    g_target_angle = target_position;
+    steerMotor.setTargetAngle(target_deg);          // clamps to 0..180
+    g_target_angle = steerMotor.getTargetAngle();
 
-    g_current_angle = ReadElbowAbsolutePosition();
-    elbowMotor.setTargetPosition(target_position);
-    elbowMotor.update(g_current_angle, dt_seconds);
+    steerMotor.update(ReadSteerRawCounts(), dt_seconds);
 
-    g_elbow_duty = elbowMotor.getOutput();
+    g_current_angle = steerMotor.getAngle();
+    g_elbow_duty = steerMotor.getOutput();
 }

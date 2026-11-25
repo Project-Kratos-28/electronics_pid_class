@@ -23,6 +23,22 @@ public:
     void enableWrap(float range);
     void disableWrap();
 
+    // Error band around the setpoint that counts as "on target", with
+    // hysteresis: the controller settles once |error| <= deadband and stays
+    // settled (output 0, integral cleared) until |error| > 2 x deadband.
+    // Without the hysteresis, a reading that flickers by one encoder count at
+    // the band edge flips the output sign every cycle and the motor buzzes.
+    // Default 0 = off.
+    void setDeadband(float deadband);
+
+    // Time constant (seconds) of a first-order low-pass filter on the D term.
+    // Encoder readings are quantised, so the raw derivative is spiky.
+    // Default 0 = no filtering.
+    void setDerivativeFilter(float tau);
+
+    // Error from the most recent compute() call (after wrap folding).
+    float getLastError() const;
+
     // measurement: current process value (position or speed)
     // dt: elapsed time in seconds since the previous call
     // returns: controller output, clamped to [outputMin, outputMax]
@@ -43,6 +59,12 @@ private:
     bool firstRun_;
     bool wrapEnabled_;
     float wrapRange_;
+
+    float deadband_;
+    bool settled_;
+    float dFilterTau_;
+    float dFiltered_;
+    float lastError_;
 
     float computeError(float measurement) const;
 };

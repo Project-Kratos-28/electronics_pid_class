@@ -11,6 +11,20 @@ PositionMotor::PositionMotor(TIM_HandleTypeDef* pwmTim, uint32_t pwmChannel, uin
       lastOutput_(0.0f)
 {
     pid_.enableWrap(positionRange); // Enabled by default for rotary motors
+
+    // Defaults that keep the motor from buzzing around the target:
+    // - deadband of 0.5% of full scale (~1.8 deg, or ~20 counts on a 12-bit encoder)
+    // - 20 ms low-pass on the D term to smooth out encoder quantisation
+    pid_.setDeadband(positionRange * DEFAULT_DEADBAND_FRACTION);
+    pid_.setDerivativeFilter(DEFAULT_D_FILTER_TAU);
+}
+
+void PositionMotor::setDeadband(float deadband) {
+    pid_.setDeadband(deadband);
+}
+
+void PositionMotor::setDerivativeFilter(float tau) {
+    pid_.setDerivativeFilter(tau);
 }
 
 void PositionMotor::disableWrap() {
@@ -41,6 +55,7 @@ void PositionMotor::stop() {
 	HAL_GPIO_WritePin(dirPort_, dirPin_, GPIO_PIN_RESET);
 	__HAL_TIM_SET_COMPARE(pwmTim_, pwmChannel_, 0);
 	lastOutput_ = 0.0f;
+	pid_.reset(); // drop stale integral / previous reading so restarting doesn't jump
 }
 
 float PositionMotor::getOutput() const
@@ -64,8 +79,11 @@ void PositionMotor::driveOutput(float pidOutput) {
     float duty = std::abs(pidOutput);
     if (duty > 100.0f) duty = 100.0f;
 
-    const float MIN_DUTY = 25.0f; // Overcomes static motor friction
-    if (duty > 0.1f && duty < MIN_DUTY) {
+    // Overcomes static motor friction. Only applied when the PID is actually
+    // asking for motion - inside the deadband the PID returns exactly 0, so
+    // the motor rests instead of being kicked to MIN_DUTY back and forth.
+    const float MIN_DUTY = 25.0f;
+    if (duty > 0.0f && duty < MIN_DUTY) {
         duty = MIN_DUTY;
     }
 
