@@ -320,7 +320,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM7) // 100us Interrupt
     {
 //        MotorControl_Update(0.001f);
-        Elbow_Control_Update(0.001f,0.1);
+        Elbow_Control_Update(g_target_angle, 0.001f); // TIM7 = 1 kHz; target set over SWD by tools/steer_tuner.py
     }
 }
 /* USER CODE END 4 */
